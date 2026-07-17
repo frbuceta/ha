@@ -6,6 +6,7 @@ from victron_mqtt.testing import finalize_injection, inject_message
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.victron_gx.const import DOMAIN
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -154,3 +155,50 @@ async def test_victron_main_topic_sensor(
     assert state.state == "mppt_active"
     # Entity uses device name only (no separate entity name)
     assert state.attributes["friendly_name"] == "Multi RS Solar"
+
+
+@pytest.mark.parametrize(
+    ("topic", "unique_id", "entity_category"),
+    [
+        pytest.param(
+            f"N/{MOCK_INSTALLATION_ID}/multi/0/Pv/1/MppOperationMode",
+            f"{MOCK_INSTALLATION_ID}_multi_0_multi_mppt_1_state",
+            None,
+            id="multi_mppt_state",
+        ),
+        pytest.param(
+            f"N/{MOCK_INSTALLATION_ID}/solarcharger/0/Pv/1/P",
+            f"{MOCK_INSTALLATION_ID}_solarcharger_0_solarcharger_tracker_1_power",
+            None,
+            id="solarcharger_tracker_power",
+        ),
+        pytest.param(
+            f"N/{MOCK_INSTALLATION_ID}/solarcharger/0/DeviceOffReason",
+            f"{MOCK_INSTALLATION_ID}_solarcharger_0_solarcharger_device_off_reason",
+            EntityCategory.DIAGNOSTIC,
+            id="solarcharger_device_off_reason",
+        ),
+    ],
+)
+async def test_noisy_entity_disabled_by_default(
+    hass: HomeAssistant,
+    init_integration: tuple[VictronVenusHub, MockConfigEntry],
+    entity_registry: er.EntityRegistry,
+    topic: str,
+    unique_id: str,
+    entity_category: EntityCategory | None,
+) -> None:
+    """Test noisy entities are registered disabled with the expected category."""
+    victron_hub, mock_config_entry = init_integration
+
+    await inject_message(victron_hub, topic, '{"value": 1}')
+    await finalize_injection(victron_hub)
+    await hass.async_block_till_done()
+
+    entities = er.async_entries_for_config_entry(
+        entity_registry, mock_config_entry.entry_id
+    )
+    entity = next(e for e in entities if e.unique_id == unique_id)
+    assert entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert entity.entity_category is entity_category
+    assert hass.states.get(entity.entity_id) is None
